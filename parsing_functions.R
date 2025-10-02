@@ -7,10 +7,11 @@ find_link <- regex("
   .+?   # Link text, again as small as possible
   \\)   # Closing parenthesis
   ",
-                   comments = TRUE)
+                   comments = TRUE
+)
 
-# Function that removes links from text and replaces them with superscripts that are 
-# referenced in an end-of-document list. 
+# Function that removes links from text and replaces them with superscripts
+# referenced in an end-of-document list.
 sanitize_links <- function(text){
   if(PDF_EXPORT){
     str_extract_all(text, find_link) %>% 
@@ -32,10 +33,9 @@ sanitize_links <- function(text){
   text
 }
 
-# Take entire positions dataframe and removes the links 
-# in descending order so links for the same position are
-# right next to eachother in number. 
+# Safe function to remove links from specified columns
 strip_links_from_cols <- function(data, cols_to_strip){
+  if(nrow(data) == 0) return(data)   # <--- handle empty data safely
   for(i in 1:nrow(data)){
     for(col in cols_to_strip){
       data[i, col] <- sanitize_links(data[i, col])
@@ -44,52 +44,68 @@ strip_links_from_cols <- function(data, cols_to_strip){
   data
 }
 
-# Take a position dataframe and the section id desired
-# and prints the section to markdown. 
+# Print a section of the resume in markdown
 print_section <- function(position_data, section_id){
-  position_data %>% 
-    filter(section == section_id) %>% 
-    arrange(desc(end)) %>% 
-    mutate(id = 1:n()) %>% 
+  
+  df <- position_data %>%
+    filter(section == section_id) %>%
+    arrange(desc(end)) %>%
+    
+    # Pivot description columns into long format
     pivot_longer(
       starts_with('description'),
       names_to = 'description_num',
       values_to = 'description'
-    ) %>% 
+    ) %>%
     filter(!is.na(description) | description_num == 'description_1') %>%
-    group_by(id) %>% 
+    ungroup() %>%
+    
+    # Assign id safely (handles empty sections)
+    mutate(id = if(nrow(.) > 0) 1:n() else integer(0)) %>%
+    
+    # Group by id to create description lists
+    group_by(id) %>%
     mutate(
       descriptions = list(description),
       no_descriptions = is.na(first(description))
-    ) %>% 
-    ungroup() %>% 
-    filter(description_num == 'description_1') %>% 
+    ) %>%
+    ungroup() %>%
+    
+    # Keep only the first description for display
+    filter(description_num == 'description_1') %>%
+    
+    # Create timeline and description bullets
     mutate(
-      timeline = ifelse(
-        is.na(start) | start == end,
-        end,
-        glue('{end} - {start}')
-      ),
+      timeline = ifelse(is.na(start) | start == end,
+                        end,
+                        glue('{end} - {start}')),
       description_bullets = ifelse(
         no_descriptions,
         ' ',
         map_chr(descriptions, ~paste('-', ., collapse = '\n'))
       )
-    ) %>% 
-    strip_links_from_cols(c('title', 'description_bullets')) %>% 
-    mutate_all(~ifelse(is.na(.), 'N/A', .)) %>% 
-    glue_data(
-      "### {title}",
-      "\n\n",
-      "{loc}",
-      "\n\n",
-      "{institution}",
-      "\n\n",
-      "{timeline}", 
-      "\n\n",
-      "{description_bullets}",
-      "\n\n\n",
-    )
+    ) %>%
+    
+    # Strip links from text
+    strip_links_from_cols(c('title', 'description_bullets')) %>%
+    ungroup() %>%
+    
+    # Replace NAs in all columns except id
+    mutate(across(-id, ~ifelse(is.na(.), 'N/A', .)))
+  
+  # Generate markdown using glue
+  glue_data(df,
+            "### {title}",
+            "\n\n",
+            "{loc}",
+            "\n\n",
+            "{institution}",
+            "\n\n",
+            "{timeline}", 
+            "\n\n",
+            "{description_bullets}",
+            "\n\n\n"
+  )
 }
 
 # Construct a bar chart of skills
@@ -107,4 +123,3 @@ build_skill_bars <- function(skills, out_of = 5){
       "</div>"
     )
 }
-
